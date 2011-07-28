@@ -14,11 +14,14 @@ function facetapi_get_block_info($realm_name = 'block') {
   // Gets delta map, iterates over all enabled facets.
   $map = facetapi_get_delta_map();
   foreach (facetapi_get_searcher_info() as $searcher => $info) {
+    // Gets cache settings for the searcher.
+    $cache = variable_get('facetapi:block_cache:' . $searcher, DRUPAL_NO_CACHE);
+
     // Adds "Current Search" blocks.
     $delta = array_search($searcher . ':current_search', $map);
     $blocks[$delta] = array(
       'info' => 'Facet API: ' . $info['label'] . ' : ' . t('Current Search'),
-      //'cache' => BLOCK_NO_CACHE,
+      'cache' => $cache,
     );
 
     // Adds facet blocks.
@@ -30,10 +33,9 @@ function facetapi_get_block_info($realm_name = 'block') {
       $delta = array_search($string, $map);
 
       // Defines the block.
-      // @todo Explore more efficient caching options.
       $blocks[$delta] = array(
         'info' => 'Facet API: ' . $info['label'] . ' : ' . $facet['label'],
-        //'cache' => BLOCK_NO_CACHE,
+        'cache' => $cache,
       );
     }
   }
@@ -96,8 +98,7 @@ function facetapi_get_block($delta) {
 
     // Adds contextual links.
     $builds[$group][$facet_name]['#contextual_links'] = array(
-      'facetapi-display' => array("admin/config/search/facetapi/$searcher/$realm_name/$facet_name/edit", array()),
-      'facetapi-dependencies' => array("admin/config/search/facetapi/$searcher/$realm_name/$facet_name/dependencies", array()),
+      'facetapi' => array('admin/config/search/facetapi', array($searcher, $realm_name, $facet_name)),
     );
 
     // Returns the subject and content of the block.

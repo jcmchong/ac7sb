@@ -133,8 +133,7 @@ abstract class FacetapiAdapter {
     $this->facets = array();
 
     // We never want to use 'q' or 'page' params.
-    $this->params = $params;
-    unset($this->params['q'], $this->params['page']);
+    $this->params = drupal_get_query_parameters($params, array('q', 'page'));
     if (!isset($this->params[self::FILTER_KEY])) {
       $this->params[self::FILTER_KEY] = array();
     }
@@ -152,7 +151,7 @@ abstract class FacetapiAdapter {
 
     // Groups enabled facets by facet alias.
     $enabled_aliases = array();
-    foreach($this->getEnabledFacets() as $facet) {
+    foreach ($this->getEnabledFacets() as $facet) {
       $enabled_aliases[$facet['field alias']][] = $facet['name'];
       $this->activeItems['facet'][$facet['name']] = array();
     }
@@ -887,7 +886,7 @@ class FacetapiFacet implements ArrayAccess {
         // Loads default widget plugin, adds settings.
         $id = $settings->settings['widget'];
         $class = ctools_plugin_load_class('facetapi', 'widgets', $id, 'handler');
-        // Fallback in case we have an invalid default widgt.
+        // If we have an invalid widget, fall back to the realm's default.
         if (!$class) {
           $id = $settings->settings['widget'] = $realm['default widget'];
           $class = ctools_plugin_load_class('facetapi', 'widgets', $id, 'handler');
@@ -903,6 +902,7 @@ class FacetapiFacet implements ArrayAccess {
           'hard_limit' => 50,
           'dependencies' => array(),
           'facet_missing' => 0,
+          'flatten' => 0,
         );
 
         // Loads the default settings from the adapter.
@@ -928,7 +928,10 @@ class FacetapiFacet implements ArrayAccess {
       $settings->settings += array('empty_behavior' => 'none');
     }
     else {
-      $settings->settings += array('facet_missing' => 0);
+      $settings->settings += array(
+        'facet_missing' => 0,
+        'flatten' => 0,
+      );
     }
 
     return $settings;
@@ -1052,8 +1055,11 @@ class FacetapiFacetProcessor {
     // NOTE: We don't use the chaining pattern so the methods can be tested.
     if ($this->facet->getAdapter()->getFacetQuery($this->facet->getFacet())) {
       if ($this->build = $this->initializeBuild($this->build)) {
+        $settings = $this->facet->getSettings();
         $this->build = $this->mapValues($this->build);
-        $this->build = $this->processHierarchy($this->build);
+        if (!$settings->settings['flatten']) {
+          $this->build = $this->processHierarchy($this->build);
+        }
         $this->processQueryStrings($this->build);
       }
     }

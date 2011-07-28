@@ -7,17 +7,13 @@ Drupal.behaviors.facetapi = {
     // @todo We need some sort of JS API so we don't have to make decisions
     // based on the realm.
     for (var index in settings.facetapi.facets) {
-      if ('block' == settings.facetapi.facets[index].realmName) {
-        if (null != settings.facetapi.facets[index].makeCheckboxes) {
-          // Find all checkbox facet links and give them a checkbox.
-          $('a.facetapi-checkbox.facetapi-inactive', context).each(Drupal.facetapi.addCheckbox);
-          // Find all unclick links and turn them into checkboxes.
-          $('a.facetapi-checkbox.facetapi-active', context).each(Drupal.facetapi.makeCheckbox);
-        }
-        if (null != settings.facetapi.facets[index].limit) {
-          // Applies soft limit to the list.
-          Drupal.facetapi.applyLimit(settings.facetapi.facets[index]);
-        }
+      if (null != settings.facetapi.facets[index].makeCheckboxes) {
+        // Find all checkbox facet links and give them a checkbox.
+        $('#' + settings.facetapi.facets[index].id + ' a.facetapi-checkbox', context).each(Drupal.facetapi.makeCheckbox);
+      }
+      if (null != settings.facetapi.facets[index].limit) {
+        // Applies soft limit to the list.
+        Drupal.facetapi.applyLimit(settings.facetapi.facets[index]);
       }
     }
   }
@@ -71,30 +67,36 @@ Drupal.facetapi.Redirect.prototype.gotoHref = function() {
   window.location.href = this.href;
 }
 
-Drupal.facetapi.addCheckbox = function() {
-  if (!$(this).hasClass('facetapi-checkbox-processed')) {
-    // Create an unchecked checkbox.
-    var checkbox = $('<input type="checkbox" class="facetapi-checkbox" />');
-    // Get the href of the link that is this DOM object.
-    var href = $(this).attr('href');
-    redirect = new Drupal.facetapi.Redirect(href);
-    checkbox.click($.proxy(redirect, 'gotoHref'));
-    $(this).before(checkbox).before('&nbsp;');
-    $(this).addClass('facetapi-checkbox-processed');
-  }
-}
-
+/**
+ * Replace an unclick link with a checked checkbox.
+ */
 Drupal.facetapi.makeCheckbox = function() {
-  if (!$(this).hasClass('facetapi-checkbox-processed')) {
-    // Create a checked checkbox.
-    var checkbox = $('<input type="checkbox" class="facetapi-checkbox" checked="true" />');
+  var $link = $(this);
+  if (!$link.hasClass('facetapi-checkbox-processed')) {
+    var active;
+    if ($link.hasClass('facetapi-inactive')) {
+      active = false;
+    }
+    else if ($link.hasClass('facetapi-active')) {
+      active = true;
+    }
+    else {
+      // Not a facet link.
+      return;
+    }
+    var checkbox = active ? $('<input type="checkbox" class="facetapi-checkbox" checked="true" />') : $('<input type="checkbox" class="facetapi-checkbox" />');
     // Get the href of the link that is this DOM object.
-    var href = $(this).attr('href');
+    var href = $link.attr('href');
     redirect = new Drupal.facetapi.Redirect(href);
     checkbox.click($.proxy(redirect, 'gotoHref'));
-    // Add the checkbox, hide the link.
-    $(this).before(checkbox).hide();
-    $(this).addClass('facetapi-checkbox-processed');
+    if (active) {
+      // Add the checkbox, hide the link.
+      $link.before(checkbox).hide();
+    }
+    else {
+      $link.before(checkbox).before('&nbsp;');
+    }
+    $link.removeClass('facetapi-checkbox').addClass('facetapi-checkbox-processed');
   }
 }
 

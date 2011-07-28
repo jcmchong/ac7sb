@@ -55,13 +55,15 @@ function facetapi_realm_settings_form($form, &$form_state, $searcher, $realm_nam
   foreach ($form['#facetapi']['facet_info'] as $facet_name => $facet) {
     $settings = $adapter->getFacet($facet)->getSettings($realm);
 
-    $form['#facetapi']['facet_info'][$facet_name]['weight'] = $settings->settings['weight'];
-    $form['table']['weight:' . $facet_name] = array(
-      '#type' => 'select',
-      '#options' => drupal_map_assoc(range(-50, 50)),
-      '#default_value' => $settings->settings['weight'],
-      '#attributes' => array('class' => array('facetapi-facet-weight')),
-    );
+    if ($realm['sortable']) {
+      $form['#facetapi']['facet_info'][$facet_name]['weight'] = $settings->settings['weight'];
+      $form['table']['weight:' . $facet_name] = array(
+        '#type' => 'select',
+        '#options' => drupal_map_assoc(range(-50, 50)),
+        '#default_value' => $settings->settings['weight'],
+        '#attributes' => array('class' => array('facetapi-facet-weight')),
+      );
+    }
 
     $options[$facet_name] = '';
     $default_value[$facet_name] = (!$settings->enabled) ? 0 : $facet_name;
@@ -74,6 +76,30 @@ function facetapi_realm_settings_form($form, &$form_state, $searcher, $realm_nam
     '#type' => 'checkboxes',
     '#options' => $options,
     '#default_value' => $default_value,
+  );
+
+  // Checks whether block caching is enabled, sets description accordingly.
+  if (!$disabled = (module_implements('node_grants') || !variable_get('block_cache', FALSE))) {
+    $description = t('Configure the appropriate cache setting for facet blocks.');
+  }
+  else {
+    $description = t(
+      'To enable block caching, visit the <a href="@performance-page">performance page</a>.',
+      array('@performance-page' => url('admin/config/development/performance', array('query' => array('destination' => $_GET['q']))))
+    );
+  }
+  $form['block_cache'] = array(
+    '#type' => 'select',
+    '#access' => ('block' == $realm_name),
+    '#title' => t('Block cache settings'),
+    '#disabled' => $disabled,
+    '#options' => array(
+      DRUPAL_NO_CACHE => t('Do not cache'),
+      DRUPAL_CACHE_PER_ROLE | DRUPAL_CACHE_PER_PAGE => t('Per role'),
+      DRUPAL_CACHE_PER_USER | DRUPAL_CACHE_PER_PAGE => t('Per user'),
+    ),
+    '#default_value' => variable_get('facetapi:block_cache:' . $searcher, DRUPAL_NO_CACHE),
+    '#description' => $description,
   );
 
   $form['actions'] = array(
@@ -104,9 +130,9 @@ function facetapi_realm_settings_form_submit($form, &$form_state) {
 
   // Builds settings object, saves to database.
   foreach ($facet_info as $facet_name => $facet) {
-    $weight = $form_state['values']['weight:' . $facet_name];
     $settings = $adapter->getFacet($facet)->getSettings($realm);
     $settings->enabled = empty($form_state['values']['enabled_facets'][$facet_name]) ? 0 : 1;
+    $weight = $realm['sortable'] ? $form_state['values']['weight:' . $facet_name] : 0;
     $settings->settings['weight'] = $weight;
     if (FALSE === ctools_export_crud_save('facetapi', $settings)) {
       drupal_set_message(t('Error saving settings.'), 'error');
@@ -125,6 +151,16 @@ function facetapi_realm_settings_form_submit($form, &$form_state) {
     }
   }
 
+  // Saves block cache settings, clears block cache if setting was changed.
+  if (isset($form_state['values']['block_cache'])) {
+    $name = 'facetapi:block_cache:' . $adapter->getSearcher();
+    $original = variable_get($name, DRUPAL_NO_CACHE);
+    variable_set($name, $form_state['values']['block_cache']);
+    if ($original != $form_state['values']['block_cache']) {
+      cache_clear_all(NULL, 'cache_block');
+    }
+  }
+
   // Clears delta map cache.
   cache_clear_all('facetapi:delta_map', 'cache');
 }
@@ -136,18 +172,21 @@ function theme_facetapi_realm_settings_table($variables) {
   $output = '';
 
   // Adds CSS to ensure that the dropbutton looks nice.
-  drupal_add_css(drupal_get_path('module', 'facetapi') . '/facetapi.css');
+  $path = drupal_get_path('module', 'facetapi');
+  drupal_add_css($path . '/facetapi.css', array('weight' => CSS_THEME - 1));
 
   // Gets variales for code readability.
   $searcher = $variables['element']['#facetapi']['adapter']->getSearcher();
-  $realm_name = $variables['element']['#facetapi']['realm']['name'];
+  $realm = $variables['element']['#facetapi']['realm'];
 
   $header = array(
     'enabled' => array('data' => t('Enabled')),
     'label' => array('data' => t('Facet')),
     'operations' => array('data' => t('Operations')),
-    'weight' => array('data' => t('Weight')),
   );
+  if ($realm['sortable']) {
+    $header['weight'] = array('data' => t('Weight'));
+  }
 
   // Builds field options.
   $rows = array();
@@ -158,22 +197,22 @@ function theme_facetapi_realm_settings_table($variables) {
     $operations = array();
     $operations[] = array(
       'title' => t('Configure display'),
-      'href' => facetapi_get_settings_path($searcher, $realm_name, $facet_name, 'edit')
+      'href' => facetapi_get_settings_path($searcher, $realm['name'], $facet_name, 'edit')
     );
     if ($facet['dependency plugins']) {
       $operations[] = array(
         'title' => t('Configure dependencies'),
-        'href' => facetapi_get_settings_path($searcher, $realm_name, $facet_name, 'dependencies')
+        'href' => facetapi_get_settings_path($searcher, $realm['name'], $facet_name, 'dependencies')
       );
     }
     $operations[] = array(
       'title' => t('Export configuration'),
-      'href' => facetapi_get_settings_path($searcher, $realm_name, $facet_name, 'export')
+      'href' => facetapi_get_settings_path($searcher, $realm['name'], $facet_name, 'export')
     );
 
     // Builds rows.
     $rows[$facet_name] = array(
-      'class' => array('draggable'),
+      'class' => $realm['sortable'] ? array('draggable') : array(),
       'data' => array(
         'indexed' => array(
           'data' => drupal_render($variables['element']['enabled_facets'][$facet_name]),
@@ -190,14 +229,18 @@ function theme_facetapi_realm_settings_table($variables) {
             ),
           )),
         ),
-        'weight' => array(
-          'data' => drupal_render($variables['element']['weight:' . $facet_name]),
-        ),
       ),
     );
+    if ($realm['sortable']) {
+      $rows[$facet_name]['data']['weight'] = array(
+        'data' => drupal_render($variables['element']['weight:' . $facet_name]),
+      );
+    }
   }
 
-  drupal_add_tabledrag('facetapi-ui-realm-settings', 'order', 'sibling', 'facetapi-facet-weight');
+  if ($realm['sortable']) {
+    drupal_add_tabledrag('facetapi-ui-realm-settings', 'order', 'sibling', 'facetapi-facet-weight');
+  }
   $output .= drupal_render_children($variables['element']);
   $output .= theme('table', array('header' => $header, 'rows' => $rows, 'attributes' => array('id' => 'facetapi-ui-realm-settings')));
 
@@ -214,6 +257,85 @@ function facetapi_get_settings_path($searcher, $realm_name, $facet_name, $op) {
   $path_parts[] = $facet_name;
   $path_parts[] = $op;
   return join('/', $path_parts);
+}
+
+/**
+ * Returns array of widget definitions available to the facet.
+ *
+ * @param array $realm
+ *   The realm definition.
+ * @param array $facet
+ *   The facet definition.
+ *
+ * @return array
+ *   An array of available widget plugins.
+ */
+function facetapi_get_widgets(array $realm, array $facet) {
+  $plugins = array();
+
+  // Iterates over all defined plugins.
+  foreach (ctools_get_plugins('facetapi', 'widgets') as $id => $plugin) {
+    $append = TRUE;
+
+    // Initializes the requirements if empty.
+    $plugin['handler'] += array(
+      'requirements' => array(
+        'facetapi_requirement_realm_property' => array('element type' => 'links')
+      ),
+    );
+
+    // Requirements fail if at least one requirements callback returns FALSE.
+    foreach ($plugin['handler']['requirements'] as $callback => $options) {
+      if (!call_user_func($callback, $realm, $facet, $options)) {
+        $append = FALSE;
+        break;
+      }
+    }
+
+    // Appends plugin if no requiremetns failed.
+    if ($append) {
+      $plugins[$id] = $plugin;
+    }
+  }
+
+  return $plugins;
+}
+
+/**
+ * Checks realm property requirement.
+ */
+function facetapi_requirement_realm_property(array $realm, array $facet, array $options) {
+  return facetapi_requirement_property($realm, $options);
+}
+
+/**
+ * Checks facet property requirement.
+ */
+function facetapi_requirement_facet_property(array $realm, array $facet, array $options) {
+  return facetapi_requirement_property($facet, $options);
+}
+
+/**
+ * Checks the equality of a property.
+ */
+function facetapi_requirement_property(array $definition, array $options) {
+  $passed = TRUE;
+  foreach ($options as $key => $requirement) {
+    $condition = $definition[$key];
+    if (is_array($requirement)) {
+      if (array_intersect_key($condition, $requirement) != $requirement) {
+        $passed = FALSE;
+        break;
+      }
+    }
+    else {
+      if ($requirement != $condition) {
+        $passed = FALSE;
+        break;
+      }
+    }
+  }
+  return $passed;
 }
 
 /**
@@ -236,9 +358,14 @@ function facetapi_get_settings_path($searcher, $realm_name, $facet_name, $op) {
  * @ingroup forms
  */
 function facetapi_facet_settings_form($form, &$form_state, FacetapiAdapter $adapter, array $realm, array $facet) {
-  drupal_add_css(drupal_get_path('module', 'facetapi') . '/facetapi.css');
-  drupal_add_js(drupal_get_path('module', 'facetapi') . '/facetapi.admin.js');
+  $path = drupal_get_path('module', 'facetapi');
+  drupal_add_css($path . '/facetapi.css', array('weight' => CSS_THEME - 1));
+  drupal_add_js($path . '/facetapi.admin.js');
   ctools_include('plugins');
+
+  // We have to set the title due to contextual link magic.
+  // @see http://drupal.org/node/1147588#comment-4428940
+  drupal_set_title(t('Configure facet display'));
 
   // Captures variables and settings for code readability.
   $searcher = $adapter->getSearcher();
@@ -272,7 +399,7 @@ function facetapi_facet_settings_form($form, &$form_state, FacetapiAdapter $adap
 
   // Builds select options for widgets, allows widgets to add settings.
   $widget_options = array();
-  foreach (ctools_get_plugins('facetapi', 'widgets') as $id => $plugin) {
+  foreach (facetapi_get_widgets($realm, $facet) as $id => $plugin) {
     $widget_options[$id] = $plugin['handler']['label'];
     $class = $plugin['handler']['class'];
     $plugin = new $class($id, $realm, $adapter->getFacet($facet), $facet_settings);
@@ -336,7 +463,7 @@ function facetapi_facet_settings_form($form, &$form_state, FacetapiAdapter $adap
     );
 
     $weight_default = (isset($sort_weight[$sort_name])) ? $sort_weight[$sort_name] : 0;
-    $form['widget']['sort']['table']['sort_weight:'. $sort_name] = array(
+    $form['widget']['sort']['table']['sort_weight:' . $sort_name] = array(
       '#type' => 'weight',
       '#title' => '',
       '#delta' => 50,
@@ -411,6 +538,17 @@ function facetapi_facet_settings_form($form, &$form_state, FacetapiAdapter $adap
     '#default_value' => $global_settings->settings['hard_limit'],
     '#options' => drupal_map_assoc(array(100, 75, 50, 40, 30, 20, 15, 10, 5, 3)),
     '#description' => t('Display no more than this number of facet items.')
+  );
+
+  $form['global']['flatten'] = array(
+    '#type' => 'radios',
+    '#access' => $facet['hierarchy callback'],
+    '#title' => t('Flatten hierarchy'),
+    '#prefix' => '<div class="facetapi-global-setting">',
+    '#suffix' => '</div>',
+    '#default_value' => $global_settings->settings['flatten'],
+    '#options' => array(0 => t('No'), 1 => t('Yes')),
+    '#description' => t('Do not process hierarchical relationships and display facet items as a flat list.'),
   );
 
   $form['global']['facet_missing'] = array(
@@ -617,6 +755,10 @@ function facetapi_combine_settings($setting_name, $settings) {
  * @ingroup forms
  */
 function facetapi_facet_dependencies_form($form, &$form_state, FacetapiAdapter $adapter, array $realm, array $dependencies) {
+
+  // We have to set the title due to contextual link magic.
+  // @see http://drupal.org/node/1147588#comment-4428940
+  drupal_set_title(t('Configure facet dependencies'));
 
   // Adds Facet API settings, excluded values aren't saved.
   $form['#facetapi'] = array(

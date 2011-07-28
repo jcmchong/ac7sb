@@ -2,7 +2,7 @@
 
 /**
  * @file
- *
+ * Widgets for facets rendered as links.
  */
 
 /**
@@ -12,13 +12,6 @@ class FacetapiWidgetLinks extends FacetapiWidget {
 
   /**
    * Overrides constructor to reset the key.
-   *
-   * @param array $realm
-   *   The realm being rendered.
-   * @param array $settings
-   *   The realm settings.
-   * @param FacetapiFacet $facet
-   *   The facet object.
    */
   public function __construct($id, array $realm, FacetapiFacet $facet, stdClass $settings) {
     parent::__construct($id, $realm, $facet, $settings);
@@ -157,5 +150,29 @@ class FacetapiWidgetLinks extends FacetapiWidget {
    */
   function getDefaultSettings() {
     return array('soft_limit' => 20);
+  }
+}
+
+/**
+ * Widget that renders facets as a list of clickable checkboxes.
+ */
+class FacetapiWidgetCheckboxLinks extends FacetapiWidgetLinks {
+
+  /**
+   * Adds JavaScript settings.
+   */
+  public function init() {
+    parent::init();
+    $this->jsSettings['makeCheckboxes'] = 1;
+  }
+
+  /**
+   * Sets the base class for checkbox facet items.
+   *
+   * @return array
+   *   An array of classes.
+   */
+  public function getItemClasses() {
+    return array('facetapi-checkbox');
   }
 }

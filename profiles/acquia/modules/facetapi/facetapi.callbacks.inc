@@ -2,7 +2,7 @@
 
 /**
  * @file
- * Callbacks defined in hook_facetapi_facet_info() implementations.
+ * Callbacks referenced in hook implementations.
  */
 
 /**

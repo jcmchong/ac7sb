@@ -44,7 +44,7 @@ function theme_facetapi_link_active($variables) {
   $suffix = '';
   if (isset($variables['text'])) {
     if (empty($variables['options']['html'])) {
-     $suffix = ' ' . check_plain($variables['text']);
+      $suffix = ' ' . check_plain($variables['text']);
     }
     else {
       $suffix  = ' ' . $variables['text'];

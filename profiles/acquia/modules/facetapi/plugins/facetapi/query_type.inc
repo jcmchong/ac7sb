@@ -114,7 +114,7 @@ class FacetapiQueryTypeDate extends FacetapiQueryType {
     $return = array();
     if (preg_match(FACETAPI_REGEX_DATE_RANGE, $item['value'], $matches)) {
       $return['start'] = $matches[1];
-      $return['end']= $matches[8];
+      $return['end'] = $matches[8];
     }
     return $return;
   }
