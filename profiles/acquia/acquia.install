@@ -7,5 +7,11 @@
  */
 function acquia_install() {
   include_once DRUPAL_ROOT . '/profiles/standard/standard.install';
-  return standard_install();
+  $result = standard_install();
+  $db_driver = Database::getConnection()->driver();
+  if ($db_driver == 'sqlsrv') {
+    // Also enable the module.
+    module_enable(array('sqlsrv'), FALSE);
+  }
+  return $result;
 }
