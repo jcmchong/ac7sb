@@ -92,6 +92,16 @@ class FacetapiQueryType {
   public function getSettings($realm = NULL) {
     return $this->adapter->getFacet($this->facet)->getSettings($realm);
   }
+
+  /**
+   * Returns the facet's active items.
+   *
+   * @return array
+   *   The facet's active items.
+   */
+  public function getActiveItems() {
+    return $this->adapter->getActiveItems($this->facet);
+  }
 }
 
 /**

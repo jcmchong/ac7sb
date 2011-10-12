@@ -6,21 +6,40 @@
  */
 
 /**
- * Themes a missing facet.
+ * Returns HTML for a "missing" facet link.
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - field_name: The name of the facet field.
+ *
+ * @ingroup themeable
  */
 function theme_facetapi_facet_missing($variables) {
   return t('Missing %field_name', array('%field_name' => $variables['field_name']));
 }
 
 /**
- * Themes the facet title.
+ * Returns HTML for the facet title, usually the title of the block.
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - title: The title of the facet.
+ *
+ * @ingroup themeable
  */
 function theme_facetapi_title($variables) {
   return t('Filter by @title:', array('@title' => drupal_strtolower($variables['title'])));
 }
 
 /**
- * Themes a facet link with an optional count.
+ * Returns HTML for an active facet item.
+ *
+ * @param $variables
+ *   An associative array containing the keys 'text', 'path', 'options', and
+ *   'count'. See the l() and theme_facetapi_count() functions for information
+ *   about these variables.
+ *
+ * @ingroup themeable
  */
 function theme_facetapi_link_inactive($variables) {
   if (!empty($variables['count'])) {
@@ -30,15 +49,26 @@ function theme_facetapi_link_inactive($variables) {
 }
 
 /**
- * Themes the count for the facet item.  For example, this number shows how many
- * results will be returned after clicking on a link.
+ * Returns HTML for the inactive facet item's count.
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - count: The item's facet count.
+ *
+ * @ingroup themeable
  */
 function theme_facetapi_count($variables) {
   return '(' . check_plain($variables['count']) . ')';
 }
 
 /**
- * Themes a facet link for a value that is currently being searched.
+ * Returns HTML for an inactive facet item.
+ *
+ * @param $variables
+ *   An associative array containing the keys 'text', 'path', and 'options'. See
+ *   the l() function for information about these variables.
+ *
+ * @ingroup themeable
  */
 function theme_facetapi_link_active($variables) {
   $suffix = '';

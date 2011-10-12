@@ -7,6 +7,17 @@ Drupal.behaviors.facetapi = {
     $('select[name="soft_limit"]').change(function() {
       $('select[name="soft_limit"]').val($(this).val());
     });
+    
+    // Ensures ALL show expanded checkboxes are updated.
+    // @see http://drupal.org/node/735528
+    $('input[name="show_expanded"]').change(function() {
+      if ($(this).attr('checked')) {
+        $('input[name="show_expanded"]').attr('checked', 'checked');
+      }
+      else {
+        $('input[name="show_expanded"]').removeAttr('checked');
+      }
+    });
 
     // Handles bug where input format fieldset is not hidden.
     // @see http://drupal.org/node/997826

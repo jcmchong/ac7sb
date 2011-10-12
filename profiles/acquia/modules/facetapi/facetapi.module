@@ -88,6 +88,7 @@ function facetapi_menu() {
       if ($first) {
         $first = FALSE;
 
+        // Add the first realm as a default local task.
         $items[$searcher_info['path'] . '/facets'] = array(
           'title' => 'Facets',
           'page callback' => 'drupal_get_form',
@@ -103,6 +104,7 @@ function facetapi_menu() {
         );
       }
       else {
+        // Add all additional realms as local tasks.
         $items[$searcher_info['path'] . '/facets/' . $realm_name] = array(
           'title' => $realm['label'],
           'page callback' => 'drupal_get_form',
@@ -119,11 +121,11 @@ function facetapi_menu() {
     'title' => 'Configure facet display',
     'load arguments' => array(4),
     'page callback' => 'drupal_get_form',
-    'page arguments' => array('facetapi_facet_settings_form', 4, 5, 6),
+    'page arguments' => array('facetapi_facet_display_form', 4, 5, 6),
     'access arguments' => array('administer search'),
     'type' => MENU_LOCAL_ACTION,
     'context' => MENU_CONTEXT_INLINE,
-    'weight' => -10,
+    'weight' => -15,
     'file' => 'facetapi.admin.inc',
   );
 
@@ -132,6 +134,18 @@ function facetapi_menu() {
     'load arguments' => array(4),
     'page callback' => 'drupal_get_form',
     'page arguments' => array('facetapi_facet_dependencies_form', 4, 5, 6),
+    'access arguments' => array('administer search'),
+    'type' => MENU_LOCAL_ACTION,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => -10,
+    'file' => 'facetapi.admin.inc',
+  );
+
+  $items['admin/config/search/facetapi/%facetapi_adapter/%facetapi_realm/%facetapi_filters/filters'] = array(
+    'title' => 'Configure facet filters',
+    'load arguments' => array(4),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('facetapi_facet_filters_form', 4, 5, 6),
     'access arguments' => array('administer search'),
     'type' => MENU_LOCAL_ACTION,
     'context' => MENU_CONTEXT_INLINE,
@@ -166,7 +180,13 @@ function facetapi_ctools_plugin_type() {
     'empty_behaviors' => array(
       'use hooks' => TRUE,
     ),
+    'filters' => array(
+      'use hooks' => TRUE,
+    ),
     'query_types' => array(
+      'use hooks' => TRUE,
+    ),
+    'url_processors' => array(
       'use hooks' => TRUE,
     ),
     'widgets' => array(
@@ -208,6 +228,10 @@ function facetapi_theme() {
       'render element' => 'element',
       'file' => 'facetapi.admin.inc',
     ),
+    'facetapi_filter_settings_table' => array(
+      'render element' => 'element',
+      'file' => 'facetapi.admin.inc',
+    ),
   );
 }
 
@@ -234,28 +258,26 @@ function facetapi_block_view($delta = '') {
 ////
 
 /**
- * Loads an instantiated adapter plugin associated with the searcher.
+ * Instantiates the adapter plugin associated with the searcher.
  *
  * @param $searcher
  *   The machine readable name of searcher.
  *
  * @return FacetapiAdapter
- *   The adapter object, FALSE if not available.
+ *   The adapter object, FALSE if the object can't be loaded.
  */
 function facetapi_adapter_load($searcher) {
   $adapters = &drupal_static(__FUNCTION__, array());
   if (!isset($adapters[$searcher])) {
     $searcher_info = facetapi_get_searcher_info();
     if (isset($searcher_info[$searcher]['adapter'])) {
-      // Loads plugin class.
       ctools_include('plugins');
       $id = $searcher_info[$searcher]['adapter'];
       $class = ctools_plugin_load_class('facetapi', 'adapters', $id, 'handler');
-      // Instantiates adapter, sets "params" if class was instantiated.
       $adapters[$searcher] = ($class) ? new $class($searcher_info[$searcher]) : FALSE;
-      if ($adapters[$searcher]) {
-        $adapters[$searcher]->setParams($_GET);
-      }
+    }
+    else {
+      $adapters[$searcher] = FALSE;
     }
   }
   return $adapters[$searcher];
@@ -265,13 +287,12 @@ function facetapi_adapter_load($searcher) {
  * Loads the dependency plugins associated with the facet.
  *
  * @param $facet_name
- *   A string containing the machine readable name of the facet.
+ *   The machine readable name of the facet.
  * @param $searcher
- *   A string containing the machine readable name of the searcher module.
+ *   The machine readable name of the searcher module.
  *
- * @return
- *   An array of instantiated dependency plugins, FALSE if the facet is not
- *   valid or the facet has no dependency plugins associated with it.
+ * @return array
+ *   An array of FacetapiDependency objects, FALSE if no plugins.
  */
 function facetapi_dependencies_load($facet_name, $searcher) {
   $dependencies = array();
@@ -288,14 +309,41 @@ function facetapi_dependencies_load($facet_name, $searcher) {
 }
 
 /**
+ * Returns array of filter options available to the facet.
+ *
+ * @param $facet_name
+ *   The machine readable name of the facet.
+ * @param $searcher
+ *   The machine readable name of the searcher.
+ *
+ * @return array
+ *   An array of FacetapiFilter objects, FALSE if no plugins.
+ */
+function facetapi_filters_load($facet_name, $searcher) {
+  $filters = array('plugins' => array());
+  if ($filters['facet'] = facetapi_facet_load($facet_name, $searcher)) {
+    $filters['plugins'] = facetapi_get_filters($filters['facet']);
+  }
+  return ($filters['plugins']) ? $filters : FALSE;
+}
+
+/**
  * Returns a realm definition.
  *
  * @param $realm_name
- *   A string containing the machine readable name of the realm.
+ *   The machine readable name of the realm.
  *
- * @return
- *   An array containing the realm definition, FALSE if $realm_name is not
- *   valid.
+ * @return array
+ *   An array containing the realm definition, FALSE if the realm is invalid.
+ *   - name: The machine name of the realm.
+ *   - label: The human readable name of the realm displayed in the admin UI.
+ *   - description: The description of the realm displayed in the admin UI.
+ *   - element type: The type of element facets are rendered as, such as 'links'
+ *     or 'form elements'.
+ *   - default widget: The default widget plugin id for facets in the realm.
+ *   - settings callback: A callback that alters the realm settings form.
+ *   - sortable: Whether the facets can be sorted via the admin UI.
+ *   - weight: The weight of the realm's menu item in comparison to the others.
  */
 function facetapi_realm_load($realm_name) {
   $realm_info = facetapi_get_realm_info();
@@ -303,20 +351,52 @@ function facetapi_realm_load($realm_name) {
 }
 
 /**
- * Loads a facet definition.
- *
- * NOTE: Facets aren't statically cached by this function, so avoid situations
- * where this needs to be called repeatedly. Use facetapi_enabled_facets_get()
- * as an alternative.
+ * Returns a facet definition.
  *
  * @param $facet_name
- *   A string containing the machine readable name of the facet.
+ *   The machine readable name of the facet.
  * @param $searcher
- *   A string containing the machine readable name of the searcher module.
+ *   The machine readable name of the searcher.
  *
  * @return
- *   An array containing the facet definition, FALSE if $facet_name or $searcher
- *   is not valid.
+ *   An array containing the facet definition, FALSE if the facet is invalid.
+ *   - name: Machine readable name of the facet.
+ *   - label: Human readable name of the facet displayed in settings forms.
+ *   - description: Description of the facet displayed in settings forms.
+ *   - field: The field name used by the backend to store and retrieve data from
+ *     the search index it is associated with.
+ *   - field alias: The query string variable inside of the filter key used to
+ *     pass the filter information through the query string.
+ *   - field api name: The machine readable name of the Field API field data the
+ *     facet is associated with, FALSE if it is not associated with a field.
+ *   - field api bundles: An array of entity names that this field contains
+ *     bundle information for.
+ *   - query type: The query type plugin ID used by the backend to execute the
+ *     facet query for this field.
+ *   - dependency plugins: An array of dependency plugin IDs that are supported
+ *     by this facet.
+ *   - default widget: The widget plugin ID used if no plugin has been selected
+ *     or the one selected is not valid.
+ *   - allowed operators: An array keyed by operator constant to boolean values
+ *     specifying whether the operator is supported.
+ *   - facet missing allowed: Whether or not missing facets are allowed.
+ *   - facet mincount allowed: Whether or not the facet supports the "minimum
+ *     facet count" setting.
+ *   - weight: The weight of the facet
+ *   - map callback: The callback used to map the raw values returned by the
+ *     index to something human readable.
+ *   - map options: An array of options passed to the map callback.
+ *   - hierarchy callback: A callback that maps the parent / child relationships
+ *     of the facet data, defaults to FALSE meaning the list is flat.
+ *   - values callback: In instances where facet data is not returned by the
+ *     backend, provide a list of values that can be used.
+ *   - min callback: For facets containing ranges, a callback returning the
+ *     minimum value in the index.
+ *   - max callback: For facets containing ranges, a callback returning the
+ *     maximum value in the index.
+ *   - default sorts: An array of available sorts. Each item is an array
+ *     containing two values, the first being the item being filtered on, the
+ *     second being the SORT_* constant.
  */
 function facetapi_facet_load($facet_name, $searcher) {
   $facet_info = facetapi_get_facet_info($searcher);
@@ -330,26 +410,70 @@ function facetapi_facet_load($facet_name, $searcher) {
 ////
 
 /**
- * Returns array of searcher information.
+ * Returns all defined searcher definitions.
+ *
+ * @return array
+ *   An array of searcher information. Each array is keyed by the machine
+ *   readable searcher name and contains the following items:
+ *   - name: The machine readable name of the searcher.
+ *   - label: The human readable name of the searcher displayed in the admin UI.
+ *   - adapter: The adapter plugin ID associated with the searcher.
+ *   - types: An array containing the types of content indexed by the searcher.
+ *     A type is usually an entity such as 'node', but it can be a non-entity
+ *     value as well.
+ *   - path: The MENU_DEFAULT_LOCAL_TASK item which the admin UI page is added
+ *     to as a MENU_LOCAL_TASK. An empty string if the backend manages the admin
+ *     UI menu items internally.
+ *   - supports facet missing: TRUE if the searcher supports "missing" facets.
+ *   - supports facet mincount: TRUE is the searcher supports the minimum facet
+ *     count setting.
  */
 function facetapi_get_searcher_info() {
-  $searcher_info = module_invoke_all('facetapi_searcher_info');
-  foreach ($searcher_info as $searcher => $info) {
-    $searcher_info[$searcher] += array(
-      'name' => $searcher,
-      'type' => 'node',
-      'supports facet missing' => FALSE,
-    );
+  $searcher_info = array();
+  foreach (module_implements('facetapi_searcher_info') as $module) {
+    // Iterates over the module's searcher definition.
+    foreach ((array) module_invoke($module, 'facetapi_searcher_info') as $searcher => $info) {
+      // @see http://drupal.org/node/1167974
+      // Converts "type" to an array and stores in "types".
+      if (isset($info['type']) && !isset($info['types'])) {
+        $info['types'] = array($info['type']);
+      }
+
+      $info += array(
+        'module' => $module,
+        'name' => $searcher,
+        'path' => '',
+        'types' => array('node'),
+        'url_processor' => 'standard',
+        'supports facet missing' => FALSE,
+        'supports facet mincount' => FALSE,
+        'include default facets' => TRUE,
+      );
+
+      // @see http://drupal.org/node/1167974
+      // Makes sure old style "type" is present.
+      if (!isset($info['type'])) {
+        $info['type'] = $info['types'][key($info['types'])];
+      }
+
+      // Maps "types" so we can do faster lookups via isset().
+      $info['types'] = drupal_map_assoc($info['types']);
+      $searcher_info[$searcher] = $info;
+    }
   }
+
   drupal_alter('facetapi_searcher_info', $searcher_info);
+  array_walk($searcher_info, 'facetapi_map_assoc', 'types');
   return $searcher_info;
 }
 
 /**
- * Returns realm definitions.
+ * Returns all defined realm definitions.
  *
- * @return
- *   An array of realm definitions.
+ * @return array
+ *   An array of realm definitions. Each definition is an array keyed by the
+ *   machine readable name of the realm. See the return value of the
+ *   facetapi_realm_load() function for the structure of the definitions.
  */
 function facetapi_get_realm_info() {
   $realm_info = &drupal_static(__FUNCTION__);
@@ -364,6 +488,7 @@ function facetapi_get_realm_info() {
         'settings callback' => FALSE,
         'element type' => 'links',
         'sortable' => TRUE,
+        'weight' => 0,
       );
     }
     drupal_alter('facetapi_realm_info', $realm_info);
@@ -373,13 +498,15 @@ function facetapi_get_realm_info() {
 }
 
 /**
- * Returns all defined facets for a searcher.
+ * Returns all defined facet definitions available to the searcher.
  *
  * @param $searcher
  *   A string containing the machine readable name of the searcher.
  *
- * @return
- *   An array containing the facet arrays, FALSE on errors.
+ * @return array
+ *   An array of facet definitions. Each definition is an array keyed by the
+ *   machine readable name of the facet. See the return value of the
+ *   facetapi_facet_load() function for the structure of the definitions.
  */
 function facetapi_get_facet_info($searcher) {
   $facet_info = &drupal_static(__FUNCTION__, array());
@@ -406,11 +533,13 @@ function facetapi_get_facet_info($searcher) {
           'field' => $facet_name,
           'field alias' => isset($info['field']) ? $info['field'] : $facet_name,
           'field api name' => FALSE,
+          'field api bundles' => array(),
           'query type' => 'term',
           'dependency plugins' => array(),
           'default widget' => FALSE,
           'allowed operators' => array(FACETAPI_OPERATOR_AND => TRUE, FACETAPI_OPERATOR_OR => TRUE),
           'facet missing allowed' => FALSE,
+          'facet mincount allowed' => FALSE,
           'weight' => 0,
           'map callback' => FALSE,
           'map options' => array(),
@@ -429,6 +558,7 @@ function facetapi_get_facet_info($searcher) {
 
     // Invokes alter hook, sorts and returns.
     drupal_alter('facetapi_facet_info', $facet_info[$searcher], $searcher_info[$searcher]);
+    array_walk($facet_info[$searcher], 'facetapi_map_assoc', 'field api bundles');
     uasort($facet_info[$searcher], 'drupal_sort_weight');
   }
 
@@ -436,10 +566,32 @@ function facetapi_get_facet_info($searcher) {
 }
 
 /**
- * Returns all defined sorts.
+ * Wrapper around drupal_map_assoc() for a key in all items of an array.
  *
- * @return
- *   An associative array of sort definitions keyed by sort name.
+ * Useful as an array_walk() callback.
+ *
+ * @param array &$array
+ *   The array being modified.
+ * @param $name
+ *   The key of the array being modified, usually the name of a definition.
+ * @param $key
+ *   The key in the array being passed to drupal_map_assoc().
+ */
+function facetapi_map_assoc(&$array, $name, $key) {
+  $array[$key] = drupal_map_assoc($array[$key]);
+}
+
+/**
+ * Returns all sort definitions.
+ *
+ * @return array
+ *   An associative array of sort definitions keyed by sort name. Each sort
+ *   definition contains:
+ *   - name: The machine readable name of the sort.
+ *   - title: The human readable name of the sort displayed in the admin UI.
+ *   - callback: The uasort() callback the render array is passed to.
+ *   - description: The description of the sort displayed in the admin UI.
+ *   - weight: The default weight of the sort specifying its processing order.
  */
 function facetapi_get_sort_info() {
   $sort_info = &drupal_static(__FUNCTION__);
@@ -448,7 +600,7 @@ function facetapi_get_sort_info() {
     foreach ($sort_info as $sort_name => $info) {
       $sort_info[$sort_name] += array(
         'name' => $sort_name,
-        'title' => $sort_name,
+        'label' => $sort_name,
         'callback' => '',
         'description' => '',
         'weight' => 0,
@@ -460,16 +612,59 @@ function facetapi_get_sort_info() {
 }
 
 /**
- * Loads settings from the database.
+ * Returns all filter definitions available to the facet.
+ *
+ * Each filter plugin must pass all the requirements checks specified in its
+ * definition. Only plugins that pass all requirements are returned.
+ *
+ * @param array $facet
+ *   The facet definition as returned by facetapi_facet_load().
+ *
+ * @return array
+ *   An associative array of filter plugin definitions keyed by the plugin ID.
+ *   Each filter plugin definition contains:
+ *   - handler: An associative array containing:
+ *     - label: The human readable name of the plugin displayed in the admin UI.
+ *     - description: The description of the plugin displayed in the admin UI.
+ *     - class: The class containing the plugin.
+ */
+function facetapi_get_filters(array $facet) {
+  $plugins = array();
+
+  // Iterates over all defined plugins.
+  foreach (ctools_get_plugins('facetapi', 'filters') as $id => $plugin) {
+    $plugin['handler'] += array(
+      'label' => $id,
+      'description' => '',
+      'requirements' => array(),
+    );
+
+    // Checks requirements.
+    if (facetapi_check_requirements($plugin['handler']['requirements'], array(), $facet)) {
+      $plugins[$id] = $plugin;
+    }
+  }
+
+  return $plugins;
+}
+
+/**
+ * Returns all enabled facet definitions available to the searcher.
+ *
+ * If a realm is passed, this function returns all facets enabled in the realm.
+ * If no realm is passed, this function returns all facets that are enabled in
+ * at least one realm.
  *
  * @param $searcher
  *   The machine readable name of the searcher.
  * @param $realm_name
- *   The machine readable name of the realm, pass NULL to return all facets
- *   that are enabled in at least one realm.
+ *   The machine readable name of the realm, pass NULL to return all facets that
+ *   are enabled in at least one realm.
  *
  * @return array
- *   Facet definitions for enabled facets.
+ *   An array of facet definitions. Each definition is an array keyed by the
+ *   machine readable name of the facet. See the return value of the
+ *   facetapi_facet_load() function for the structure of the definitions.
  */
 function facetapi_get_enabled_facets($searcher, $realm_name = NULL) {
   $enabled_facets = &drupal_static(__FUNCTION__, array());
@@ -541,13 +736,15 @@ function facetapi_facetapi_realm_info() {
  */
 function facetapi_facetapi_facet_info($searcher_info) {
   $facets = array();
-  if ('node' == $searcher_info['type']) {
+  if (isset($searcher_info['types']['node']) && $searcher_info['include default facets']) {
 
     $facets['bundle'] = array(
       'label' => t('Content type'),
       'description' => t('Filter by content type.'),
+      'field api bundles' => array('node'),
       'map callback' => 'facetapi_map_bundle',
       'values callback' => 'facetapi_callback_type_values',
+      'facet mincount allowed' => TRUE,
       'dependency plugins' => array('role'),
     );
 
@@ -557,6 +754,7 @@ function facetapi_facetapi_facet_info($searcher_info) {
       'field' => 'uid',
       'map callback' => 'facetapi_map_author',
       'values callback' => 'facetapi_callback_user_values',
+      'facet mincount allowed' => TRUE,
       'dependency plugins' => array('bundle', 'role'),
     );
 
@@ -566,6 +764,7 @@ function facetapi_facetapi_facet_info($searcher_info) {
       'field' => 'language',
       'map callback' => 'facetapi_map_language',
       'values callback' => 'facetapi_callback_language_values',
+      'facet mincount allowed' => TRUE,
       'dependency plugins' => array('bundle', 'role'),
     );
 
@@ -661,13 +860,34 @@ function facetapi_facetapi_widgets() {
 }
 
 /**
+ * Implements hook_facetapi_filters().
+ */
+function facetapi_facetapi_filters() {
+  return array(
+    'active_items' => array(
+      'handler' => array(
+        'label' => t('Do not display active items'),
+        'class' => 'FacetapiFilterActiveItems',
+      ),
+    ),
+    'current_depth' => array(
+      'handler' => array(
+        'label' => t('Only show items in the current level of the hierarchy'),
+        'class' => 'FacetapiFilterCurrentDepth',
+        'requirements' => array('facetapi_requirement_facet_hierarchical' => TRUE),
+      ),
+    ),
+  );
+}
+
+/**
  * Implements hook_facetapi_dependencies().
  */
 function facetapi_facetapi_dependencies() {
   return array(
     'bundle' => array(
       'handler' => array(
-        'label' => t('Content types'),
+        'label' => t('Bundles'),
         'class' => 'FacetapiDependencyBundle',
       ),
     ),
@@ -695,6 +915,20 @@ function facetapi_facetapi_empty_behaviors() {
       'handler' => array(
         'label' => t('Display text'),
         'class' => 'FacetapiEmptyBehaviorText',
+      ),
+    ),
+  );
+}
+
+/**
+ * Implements hook_facetapi_url_processors().
+ */
+function facetapi_facetapi_url_processors() {
+  return array(
+    'standard' => array(
+      'handler' => array(
+        'label' => t('Standard URL processors'),
+        'class' => 'FacetapiUrlProcessorStandard',
       ),
     ),
   );
@@ -736,10 +970,232 @@ function facetapi_facet_enabled($searcher, $realm_name, $facet_name) {
  * @param $realm_name
  *   The machine readable name of the realm.
  *
- * @return
+ * @return array
  *   The realm's render array.
  */
 function facetapi_build_realm($searcher, $realm_name) {
   $adapter = facetapi_adapter_load($searcher);
   return ($adapter) ? $adapter->buildRealm($realm_name) : array();
+}
+
+/**
+ * Checks requirements.
+ *
+ * Requirements fail if at least one requirements callback returns FALSE. Note
+ * that if no requirement callbacks are passed, this function will return TRUE.
+ *
+ * @param array $requirements
+ *   The requirements keyed by callback to options.
+ * @param array $realm
+ *   The realm definition.
+ * @param array $facet
+ *   The facet definition.
+ *
+ * @return
+ *   A boolean flagging whether all requirements were passed.
+ */
+function facetapi_check_requirements(array $requirements, array $realm, array $facet) {
+  $return = TRUE;
+  module_load_include('inc', 'facetapi', 'facetapi.requirements');
+  foreach ($requirements as $callback => $options) {
+    if (!call_user_func($callback, $realm, $facet, $options)) {
+      $return = FALSE;
+      break;
+    }
+  }
+  return $return;
+}
+
+/**
+ * Enables or disables a facet for this page load only.
+ *
+ * @param $searcher
+ *   The machine readable name of the searcher.
+ * @param $realm_name
+ *   The machine readable name of the realm, pass NULL for all realms.
+ * @param $facet_name
+ *   The machine readable name of the facet.
+ * @param $status
+ *   A boolean flagging whether the facet is enabled or disabled.
+ * @param $batch_process
+ *   A boolean flagging whether batch processing is being performed.  If set to
+ *   TRUE, the list of enabled facets won't be rebuild and the active items
+ *   won't be re-processed.  Note that these tasks will have to be performed
+ *   manually in order for the status to be properly set.
+ */
+function facetapi_set_facet_status($searcher, $realm_name, $facet_name, $status, $batch_process) {
+  // Rebuild static if not batch processing.
+  if (!$batch_process) {
+    drupal_static('facetapi_get_enabled_facets', array(), TRUE);
+  }
+
+  // Pulls the list of enabled facets so we can modify it here.
+  facetapi_get_enabled_facets($searcher, $realm_name);
+  $enabled_facets = &drupal_static('facetapi_get_enabled_facets', array());
+
+  // Performs the operation by setting or unsetting the facet.
+  $cid = $searcher . ':' . (string) $realm_name;
+  if ($status && !isset($enabled_facets[$cid][$facet_name])) {
+    if ($facet = facetapi_facet_load($facet_name, $searcher)) {
+      // Add facet to static, which enables it.
+      $enabled_facets[$cid][$facet_name] = $facet;
+      // If facet isn't already globally enabled, enable it.
+      if (!isset($enabled_facets[$searcher . ':'][$facet_name])) {
+        // Ensure sure static is set before modifying it.
+        facetapi_get_enabled_facets($searcher, NULL);
+        $enabled_facets[$searcher . ':'][$facet_name] = $facet;
+      }
+    }
+  }
+  elseif (!$status && isset($enabled_facets[$cid][$facet_name])) {
+    // Removes facet to static, which disables it.
+    unset($enabled_facets[$cid][$facet_name]);
+    // If acting globally, disable facet in all realms.
+    if (!$realm_name) {
+      foreach (facetapi_get_realm_info() as $realm) {
+        // Ensure sure static is set before unsetting the facet.
+        facetapi_get_enabled_facets($searcher, $realm['name']);
+        unset($enabled_facets[$searcher . ':' . $realm['name']][$facet_name]);
+      }
+    }
+  }
+  else {
+    return;
+  }
+
+  // Re-process the active items since the list of active facets has changed.
+  if (!$batch_process && ($adapter = facetapi_adapter_load($searcher))) {
+    $adapter->processActiveItems();
+  }
+}
+
+/**
+ * Enables a facet for this page load only.
+ *
+ * If you are enabling facets in the block realm, you will have to force the
+ * delta mapping so that the block can be configured even if it is disabled via
+ * the Facet API interface. Otherwise you will not be able to assign the block
+ * to a region because it won't be available in admin/structure/block.
+ *
+ * @param $searcher
+ *   The machine readable name of the searcher.
+ * @param $realm_name
+ *   The machine readable name of the realm, pass NULL for all realms.
+ * @param $facet_name
+ *   The machine readable name of the facet.
+ * @param $batch_process
+ *   A boolean flagging whether batch processing is being performed.
+ *
+ * @see facetapi_set_facet_status()
+ * @see hook_facetapi_force_delta_mapping().
+ */
+function facetapi_set_facet_enabled($searcher, $realm_name, $facet_name, $batch_process = FALSE) {
+  return facetapi_set_facet_status($searcher, $realm_name, $facet_name, TRUE, $batch_process);
+}
+
+/**
+ * Disables a facet for this page load only.
+ *
+ * @param $searcher
+ *   The machine readable name of the searcher.
+ * @param $realm_name
+ *   The machine readable name of the realm, pass NULL for all realms.
+ * @param $facet_name
+ *   The machine readable name of the facet.
+ * @param $batch_process
+ *   A boolean flagging whether batch processing is being performed.
+ *
+ * @see facetapi_set_facet_status()
+ */
+function facetapi_set_facet_disabled($searcher, $realm_name, $facet_name, $batch_process = FALSE) {
+  return facetapi_set_facet_status($searcher, $realm_name, $facet_name, FALSE, $batch_process);
+}
+
+/**
+ * Sets the facet status in a given realm, stores settings in the database.
+ *
+ * @param FacetapiAdapter $adapter
+ *   The adapter object of the searcher the settings are being modified for.
+ * @param array $realm
+ *   The realm definition as returned by facetapi_realm_load().
+ * @param array $facet
+ *   The facet definition as returned by facetapi_facet_load().
+ * @param $status
+ *   Flags whether or not the facet is being enabled or disabled.
+ * @param $weight
+ *   If the realm is sortable, allows the assigning of a weight. Pass FALSE to
+ *   maintain the previously stored value.
+ * @param $batch_process
+ *   A boolean flagging whether batch processing is being performed.  If set to
+ *   TRUE, the caches and statics won't be reset.
+ *
+ * @reutrn
+ *   TRUE if the operation succeeded, FALSE otherwise.
+ */
+function facetapi_save_facet_status(FacetapiAdapter $adapter, array $realm, array $facet, $status, $weight, $batch_process) {
+  // Loads the realm settings, sets enabled flag and weight.
+  $settings = $adapter->getFacet($facet)->getSettings($realm);
+  $settings->enabled = ($status) ? 1 : 0;
+  if (FALSE !== $weight) {
+    $settings->settings['weight'] = $realm['sortable'] ? $weight : 0;
+  }
+
+  // Saves the settings in the database, stores the result.
+  // NOTE: CTools export componenet loaded in the getSettings() method.
+  $success = (FALSE !== ctools_export_crud_save('facetapi', $settings));
+
+  // Clears caches and statics if we are not batch processing.
+  if ($success && !$batch_process) {
+    drupal_static('facetapi_get_enabled_facets', array(), TRUE);
+    if ('block' == $realm['name']) {
+      cache_clear_all(NULL, 'cache_block');
+      cache_clear_all('facetapi:delta_map', 'cache');
+    }
+  }
+
+  return $success;
+}
+
+/**
+ * Enables a facet in a given realm, stores settings in the database.
+ *
+ * @param FacetapiAdapter $adapter
+ *   The adapter object of the searcher the settings are being modified for.
+ * @param array $realm
+ *   The realm definition as returned by facetapi_realm_load().
+ * @param array $facet
+ *   The facet definition as returned by facetapi_facet_load().
+ * @param $weight
+ *   If the realm is sortable, allows the assigning of a weight. Pass FALSE to
+ *   maintain the previously stored value.
+ * @param $batch_process
+ *   A boolean flagging whether batch processing is being performed.
+ *
+ * @reutrn
+ *   TRUE if the operation succeeded, FALSE otherwise.
+ */
+function facetapi_save_facet_enabled(FacetapiAdapter $adapter, array $realm, array $facet, $weight = FALSE, $batch_process = FALSE) {
+  return facetapi_save_facet_status($adapter, $realm, $facet, TRUE, $weight, $batch_process);
+}
+
+/**
+ * Disables a facet in a given realm, stores settings in the database.
+ *
+ * @param FacetapiAdapter $adapter
+ *   The adapter object of the searcher the settings are being modified for.
+ * @param array $realm
+ *   The realm definition as returned by facetapi_realm_load().
+ * @param array $facet
+ *   The facet definition as returned by facetapi_facet_load().
+ * @param $weight
+ *   If the realm is sortable, allows the assigning of a weight. Pass FALSE to
+ *   maintain the previously stored value.
+ * @param $batch_process
+ *   A boolean flagging whether batch processing is being performed.
+ *
+ * @reutrn
+ *   TRUE if the operation succeeded, FALSE otherwise.
+ */
+function facetapi_save_facet_disabled(FacetapiAdapter $adapter, array $realm, array $facet, $weight = FALSE, $batch_process = FALSE) {
+  return facetapi_save_facet_status($adapter, $realm, $facet, FALSE, $weight, $batch_process);
 }

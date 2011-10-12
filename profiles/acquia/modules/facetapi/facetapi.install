@@ -83,7 +83,12 @@ function facetapi_install() {
  * Implementation of hook_uninstall().
  */
 function facetapi_uninstall() {
-  // Nothing to do...
+  // Remove all variables that start with "facetapi:".
+  $args = array(':module' => 'facetapi%');
+  $result = db_query('SELECT name FROM {variable} WHERE name LIKE :module', $args);
+  foreach ($result as $record) {
+    variable_del($record->name);
+  }
 }
 
 /**
@@ -103,5 +108,63 @@ function facetapi_update_7000() {
         ->condition('delta', $orig_delta)
         ->execute();
     }
+  }
+}
+
+/**
+ * Hashes all blocks deltas related to Facet API.
+ */
+function facetapi_update_7001() {
+
+  // Clears the delta cache.
+  db_delete('cache')
+    ->condition('cid', 'facetapi:delta_map')
+    ->execute();
+
+  // Deletes blocks that are not enabled so they will get re-hashed.
+  db_delete('block')
+    ->condition('module', 'facetapi')
+    ->condition('status', 0)
+    ->execute();
+
+  // Rehashes deltas of enabled facet blocks.
+  $result = db_query("SELECT delta, bid FROM {block} WHERE module = 'facetapi'");
+  foreach ($result as $record) {
+    $current_search = FALSE;
+
+    // Extracts the searcher, realm name, and facet name from $delta.
+    // Process the parts from the end in case the searcher includes a ':'.
+    $parts = explode(':', $record->delta);
+    $facet_name = array_pop($parts);
+    $realm_name = array_pop($parts);
+    $searcher = implode(':', $parts);
+
+    // We are viewing the current search block.
+    if (!$searcher && 'current_search' == $facet_name) {
+      $current_search = TRUE;
+    }
+
+    // If we don't have a searcher and we aren't viewing the current search
+    // block, delta is probably hashed and we should continue to the next one.
+    if (!$current_search && !$searcher) {
+      // Let's do some block cleanup. Anything less that 32 chars is NOT a hash
+      // and doesn't need to be in the database.
+      if (strlen($record->delta) == 32) {
+        continue;
+      }
+      else {
+        db_delete('block')
+          ->condition('bid', $record->bid)
+          ->execute();
+      }
+    }
+
+    // Hashes the delta and updates.
+    $delta = substr(drupal_hash_base64($record->delta), 0, 32);
+    db_update('block')
+      ->fields(array('delta' => $delta))
+      ->condition('module', 'facetapi')
+      ->condition('delta', $record->delta)
+      ->execute();
   }
 }

@@ -78,7 +78,7 @@ class FacetapiWidgetLinks extends FacetapiWidget {
       // Initializes variables passed to theme hook.
       $variables = array(
         'text' => $item['#markup'],
-        'path' => $_GET['q'],
+        'path' => $item['#path'],
         'count' => $item['#count'],
         'options' => array(
           'attributes' => array('class' => $this->getItemClasses()),
@@ -87,12 +87,14 @@ class FacetapiWidgetLinks extends FacetapiWidget {
         ),
       );
 
-      // We don't display children unless the parent is clicked.
+      // If the item has no children, it is a leaf.
       if (empty($item['#item_children'])) {
         $row['class'][] = 'leaf';
       }
       else {
-        if ($item['#active']) {
+        // If the item is active or the "show_expanded" setting is selected,
+        // show this item as expanded so we see its children.
+        if ($item['#active'] || !empty($this->settings->settings['show_expanded'])) {
           $row['class'][] = 'expanded';
           $row['children'] = $this->buildListItems($item['#item_children']);
         }
@@ -134,6 +136,21 @@ class FacetapiWidgetLinks extends FacetapiWidget {
       ),
     );
 
+    // @see http://drupal.org/node/735528
+    if ($this->facet['hierarchy callback']) {
+      $form['widget']['widget_settings']['links'][$this->id]['show_expanded'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Expand hierarchy'),
+        '#default_value' => !empty($this->settings->settings['show_expanded']),
+        '#description' => t('Show the entire tree regardless of whether the parent items are active.'),
+        '#states' => array(
+          'visible' => array(
+            'select[name="widget"]' => array('value' => $this->id),
+          ),
+        ),
+      );
+    }
+
     // Hides all but the last element. The #states system will override this,
     // however it is necessary if JavaScript is disabled so multiple elements
     // aren't displayed to the user.
@@ -149,7 +166,10 @@ class FacetapiWidgetLinks extends FacetapiWidget {
    * Returns defaults for the settings this widget provides.
    */
   function getDefaultSettings() {
-    return array('soft_limit' => 20);
+    return array(
+      'soft_limit' => 20,
+      'show_expanded' => 0,
+    );
   }
 }
 

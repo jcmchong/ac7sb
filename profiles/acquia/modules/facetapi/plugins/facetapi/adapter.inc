@@ -26,13 +26,6 @@ abstract class FacetapiAdapter {
   protected $keys;
 
   /**
-   * An array of query type plugin definitions keyed by type.
-   *
-   * @var array
-   */
-  protected $queryTypes = array();
-
-  /**
    * An array of FacetapiFacet objects.
    *
    * @var array
@@ -51,7 +44,14 @@ abstract class FacetapiAdapter {
    *
    * @var array
    */
-  protected $facetQueries = array();
+  protected $queryTypes = array();
+
+  /**
+   * The URL processor associated with this adapter.
+   *
+   * @var FacetapiUrlProcessor
+   */
+  protected $urlProcessor;
 
   /**
    * An array of active filters.
@@ -61,13 +61,6 @@ abstract class FacetapiAdapter {
   protected $activeItems;
 
   /**
-   * An array of parameters, such as from $_GET.
-   *
-   * @var array
-   */
-  protected $params;
-
-  /**
    * A boolean flagging whether the facets have been processed.
    *
    * @var boolean
@@ -75,9 +68,11 @@ abstract class FacetapiAdapter {
   protected $processed = FALSE;
 
   /**
-   * Define the array key in the params that is used for filters.
+   * Stores the search path so we only need to calculate it once.
+   *
+   * @var string
    */
-  const FILTER_KEY = 'f';
+  protected $searchPath;
 
   /**
    * Constructor, sets searcher and type of content being indexed.
@@ -89,12 +84,37 @@ abstract class FacetapiAdapter {
     $this->info = $searcher_info;
 
     // Registers the query type plugins classes associated with this adapter.
+    $registered_types = array();
     foreach (ctools_get_plugins('facetapi', 'query_types') as $plugin) {
       if ($searcher_info['adapter'] == $plugin['handler']['adapter']) {
         $type = call_user_func(array($plugin['handler']['class'], 'getType'));
-        $this->queryTypes[$type] = $plugin['handler']['class'];
+        $registered_types[$type] = $plugin['handler']['class'];
       }
     }
+
+    // Instantiates query type plugin for each enabled facet.
+    foreach($this->getEnabledFacets() as $facet) {
+      if (isset($registered_types[$facet['query type']])) {
+        $plugin = new $registered_types[$facet['query type']]($this, $facet);
+        $this->queryTypes[$facet['name']] = $plugin;
+      }
+      else {
+        $this->queryTypes[$facet['name']] = FALSE;
+      }
+    }
+
+    // Instantiates URL processor plugin.
+    $id = $searcher_info['url_processor'];
+    $class = ctools_plugin_load_class('facetapi', 'url_processors', $id, 'handler');
+    if (!$class) {
+      $class = ctools_plugin_load_class('facetapi', 'url_processors', 'standard', 'handler');
+    }
+    $this->urlProcessor = new $class($this);
+
+    // Fetches, normalizes, and sets filter params.
+    $filter_key = $this->urlProcessor->getFilterKey();
+    $params = $this->urlProcessor->normalizeParams($this->urlProcessor->fetchParams(), $filter_key);
+    $this->setParams($params, $filter_key);
   }
 
   /**
@@ -120,31 +140,27 @@ abstract class FacetapiAdapter {
   abstract public function suppressOutput($realm_name);
 
   /**
-   * Processes a raw arrray of active filters.
+   * Processes a raw array of active filters.
    *
    * @param array $params
    *   An array of keyed params, such as $_GET.
+   * @param string $filter_key
+   *   The array key in $params corresponding to filters.
    *
    * @return FacetapiAdapter
    *   An instance of this class.
    */
-  public function setParams(array $params = array()) {
-    // Need to rebuild facets if we use different params.
+  public function setParams(array $params = array(), $filter_key = 'f') {
     $this->facets = array();
-
-    // We never want to use 'q' or 'page' params.
-    $this->params = drupal_get_query_parameters($params, array('q', 'page'));
-    if (!isset($this->params[self::FILTER_KEY])) {
-      $this->params[self::FILTER_KEY] = array();
-    }
-
-    // Processes active items, returns this class.
+    $this->urlProcessor->setParams($params, $filter_key);
     $this->processActiveItems();
     return $this;
   }
 
   /**
    * Processes active items.
+   *
+   * @see FacetapiAdapter::setParams()
    */
   public function processActiveItems() {
     $this->activeItems = array('facet' => array(), 'filter' => array());
@@ -157,7 +173,9 @@ abstract class FacetapiAdapter {
     }
 
     // Extracts valid filters from query string.
-    foreach ($this->params[self::FILTER_KEY] as $pos => $filter) {
+    $filter_key = $this->urlProcessor->getFilterKey();
+    $params = $this->urlProcessor->getParams();
+    foreach ($params[$filter_key] as $pos => $filter) {
       // Bails if an object or array.
       if (!is_scalar($filter)) {
         continue;
@@ -165,11 +183,12 @@ abstract class FacetapiAdapter {
 
       // Performs basic parsing of the filter.
       $parts = explode(':', $filter, 2);
-      if (isset($parts[1]) && isset($enabled_aliases[$parts[0]])) {
+      $field_alias = rawurldecode($parts[0]);
+      if (isset($parts[1]) && isset($enabled_aliases[$field_alias])) {
 
         // Stores the base item.
         $item = array(
-          'field alias' => $parts[0],
+          'field alias' => $field_alias,
           'value' => $parts[1],
           'pos' => $pos,
         );
@@ -179,7 +198,8 @@ abstract class FacetapiAdapter {
         $this->activeItems['filter'][$filter]['facets'] = array();
 
         // Stores active items per facet.
-        foreach ($enabled_aliases[$parts[0]] as $facet_name) {
+        foreach ($enabled_aliases[$field_alias] as $facet_name) {
+          $item += $this->queryTypes[$facet_name]->extract($item);
           $this->activeItems['filter'][$filter]['facets'][] = $facet_name;
           $this->activeItems['facet'][$facet_name][$parts[1]] = $item;
         }
@@ -188,13 +208,13 @@ abstract class FacetapiAdapter {
   }
 
   /**
-   * Returns the set parameters.
+   * Returns the URL Processor.
    *
-   * @return array
-   *   The set parameters.
+   * @return FacetapiUrlProcessor
+   *   The URL Processor plugin.
    */
-  public function getParams() {
-    return $this->params;
+  public function getUrlProcessor() {
+    return $this->urlProcessor;
   }
 
   /**
@@ -261,8 +281,8 @@ abstract class FacetapiAdapter {
    * @return
    *   The type of content indexed by $this->info['searcher'].
    */
-  public function getType() {
-    return $this->info['type'];
+  public function getTypes() {
+    return $this->info['types'];
   }
 
   /**
@@ -276,6 +296,26 @@ abstract class FacetapiAdapter {
    */
   public function getPath($realm_name) {
     return $this->info['path'] . '/facets/' . $realm_name;
+  }
+
+  /**
+   * Returns the search path.
+   *
+   * @return string
+   *   A string containing the search path.
+   *
+   * @todo D8 should provide an API function for this.
+   */
+  public function getSearchPath() {
+    if (NULL === $this->searchPath) {
+      if ($path = module_invoke($this->info['module'] . '_search', 'search_info')) {
+        $this->searchPath = 'search/' . $path['path'];
+        if (!isset($_GET['keys']) && ($keys = $this->getSearchKeys())) {
+          $this->searchPath .= '/' . $keys;
+        }
+      }
+    }
+    return $this->searchPath;
   }
 
   /**
@@ -330,13 +370,23 @@ abstract class FacetapiAdapter {
   }
 
   /**
-   * Returns TRUE if the back-end supports "missing".
+   * Returns TRUE if the back-end supports "missing" facets.
    *
    * @return bool
    *   TRUE or FALSE.
    */
   public function supportsFacetMissing() {
     return $this->info['supports facet missing'];
+  }
+
+  /**
+   * Returns TRUE if the back-end supports "minimum facet counts".
+   *
+   * @return bool
+   *   TRUE or FALSE.
+   */
+  public function supportsFacetMincount() {
+    return $this->info['supports facet mincount'];
   }
 
   /**
@@ -364,8 +414,8 @@ abstract class FacetapiAdapter {
       // Add query type plugin if dependencies were met, otherwise remove the
       // facet's active items so they don't display in the current search block
       // or appear as active in the breadcrumb trail.
-      if ($display) {
-        $this->addFacetQuery($facet, $query);
+      if ($display && $this->queryTypes[$facet['name']]) {
+        $this->queryTypes[$facet['name']]->execute($query);
       }
       else {
         foreach ($this->activeItems['facet'][$facet['name']] as $item) {
@@ -419,33 +469,6 @@ abstract class FacetapiAdapter {
   }
 
   /**
-   * Adds a query type plugin to the queue.
-   *
-   * Parses additional information from the active items, invokes the plugin's
-   * execute() method to add any filters to the query object.
-   *
-   * @param array $facet
-   *   The facet definition.
-   * @param mixed $query
-   *   A mixed value containing the query in the backend's native API.
-   */
-  public function addFacetQuery(array $facet, $query) {
-    if (isset($this->queryTypes[$facet['query type']])) {
-
-      // Instantiates query type plugin.
-      $plugin = new $this->queryTypes[$facet['query type']]($this, $facet);
-      $this->facetQueries[$facet['name']] = $plugin;
-
-      // Parses additional info from the passed value.
-      foreach ($this->activeItems['facet'][$facet['name']] as $value => &$item) {
-        $item += $plugin->extract($item);
-      }
-      // Adds filters to backend.
-      $plugin->execute($query);
-    }
-  }
-
-  /**
    * Returns a registered facet query
    *
    * @param array|string $facet
@@ -456,8 +479,8 @@ abstract class FacetapiAdapter {
    */
   public function getFacetQuery($facet) {
     $facet_name = (is_array($facet)) ? $facet['name'] : $facet;
-    if (isset($this->facetQueries[$facet_name])) {
-      return $this->facetQueries[$facet_name];
+    if (isset($this->queryTypes[$facet_name])) {
+      return $this->queryTypes[$facet_name];
     }
   }
 
@@ -482,56 +505,21 @@ abstract class FacetapiAdapter {
   }
 
   /**
-   * Sets the breadcrumb trail on searches.
+   * Helper function that returns the query string variables for a facet item.
+   *
+   * @param array $facet
+   *   The facet definition.
+   * @param array $values
+   *   An array containing the item's values being added to or removed from the
+   *   query string dependent on whether or not the item is active.
+   * @param int $active
+   *   An integer flagging whether the item is active or not.
+   *
+   * @return array
+   *   The query string vriables.
    */
-  public function setBreadcrumb() {
-    $breadcrumb = drupal_get_breadcrumb();
-    $enabled_facets = $this->getEnabledFacets();
-
-    $keys = $this->getSearchKeys();
-    $active_items = $this->getAllActiveItems();
-    // Make sure the search page itself is in the breadcrumb if we are going to
-    // add more crumbs. Wow this breadcrumb code sucks.
-    $item = menu_get_item();
-    $last_load_func = is_array($item['load_functions']) ? end($item['load_functions']) : NULL;
-    if ((!$keys && $active_items) || ($keys && $last_load_func != 'menu_tail_load')) {
-      $last = end($breadcrumb);
-      $this_page = l($item['title'], $item['href'], $item['localized_options']);
-      if ($last != $this_page) {
-        $breadcrumb[] = $this_page;
-      }
-    }
-    // Adds the current search to the query.
-    // @todo Need a getBaseQuery() method or something.
-    if ($keys) {
-      // The last item should be text, not a link.
-      $breadcrumb[] = $active_items ? l($keys, $_GET['q']) : check_plain($keys);
-    }
-
-    // Initializes base breadcrumb query.
-    $query = $this->params;
-    unset($query[self::FILTER_KEY]);
-
-    // Adds filters to the breadcrumb trail.
-    $last = end($active_items);
-    foreach ($active_items as $item) {
-      $query[self::FILTER_KEY][] = $item['field alias'] . ':' . $item['value'];
-
-      // Replaces with the mapped value.
-      $value = $this->getMappedValue($item['facets'][0], $item['value']);
-
-      // The last item should be text, not a link.
-      if ($last == $item) {
-        $breadcrumb[] = !empty($value['#html']) ? $value['#markup'] : check_plain($value['#markup']);
-      }
-      else {
-        // Appends the filter to the breadcrumb trail.
-        $breadcrumb[] = l($value['#markup'], $_GET['q'], array('query' => $query, 'html' => !empty($value['#html'])));
-      }
-    }
-
-    // Sets the breadcrumb trail with searck keys and filters.
-    drupal_set_breadcrumb($breadcrumb);
+  public function getQueryString(array $facet, array $values, $active) {
+    return $this->urlProcessor->getQueryString($facet, $values, $active);
   }
 
   /**
@@ -612,15 +600,14 @@ abstract class FacetapiAdapter {
 
       // Initializes each facet's render array.
       foreach ($this->getEnabledFacets() as $facet) {
-        $this->processors[$facet['name']] = new FacetapiFacetProcessor(
-          $this->getFacet($facet), self::FILTER_KEY
-        );
+        $processor = new FacetapiFacetProcessor($this->getFacet($facet));
+        $this->processors[$facet['name']] = $processor;
         $this->processors[$facet['name']]->process();
       }
 
       // Sets the breadcrumb trail if a search was executed.
       if ($this->searchExecuted()) {
-        $this->setBreadcrumb();
+        $this->urlProcessor->setBreadcrumb();
       }
     }
   }
@@ -722,13 +709,6 @@ class FacetapiFacet implements ArrayAccess {
    * @var array
    */
   protected $build = array();
-
-  /**
-   * The initialized query string for all facets.
-   *
-   * @var array
-   */
-  protected $params;
 
   /**
    * Constructor, sets adapter and facet definition.
@@ -869,6 +849,7 @@ class FacetapiFacet implements ArrayAccess {
         $settings->settings = array(
           'weight' => 0,
           'widget' => $widget,
+          'filters' => array(),
           'active_sorts' => array(),
           'sort_weight' => array(),
           'sort_order' => array(),
@@ -893,7 +874,6 @@ class FacetapiFacet implements ArrayAccess {
         }
         $plugin = new $class($id, $realm, $this, $settings);
         $settings->settings += $plugin->getDefaultSettings();
-
       }
       else {
         // Initializes settings.
@@ -901,6 +881,7 @@ class FacetapiFacet implements ArrayAccess {
           'operator' => FACETAPI_OPERATOR_AND,
           'hard_limit' => 50,
           'dependencies' => array(),
+          'facet_mincount' => 1,
           'facet_missing' => 0,
           'flatten' => 0,
         );
@@ -915,7 +896,6 @@ class FacetapiFacet implements ArrayAccess {
           $settings->settings['dependencies'] = array();
           $settings->settings['dependencies'] += $plugin->getDefaultSettings();
         }
-
       }
 
       // @todo Explore whether we should save settings for performance.
@@ -925,10 +905,14 @@ class FacetapiFacet implements ArrayAccess {
     // prevent undefuned index errors after upgrading.
     // @todo Remove in later versions.
     if ($realm) {
-      $settings->settings += array('empty_behavior' => 'none');
+      $settings->settings += array(
+        'empty_behavior' => 'none',
+        'filters' => array(),
+      );
     }
     else {
       $settings->settings += array(
+        'facet_mincount' => 1,
         'facet_missing' => 0,
         'flatten' => 0,
       );
@@ -954,15 +938,32 @@ class FacetapiFacet implements ArrayAccess {
     // Gets the base render array from the facet processor.
     $this->build = $processor->getBuild();
 
+    // Executes filter plugins.
+    // @todo Defensive coding here for filters?
+    $enabled_filters = array_filter($settings->settings['filters'], 'facetapi_filter_disabled_filters');
+    uasort($enabled_filters, 'drupal_sort_weight');
+    foreach ($enabled_filters as $filter_id => $filter_settings) {
+      if ($class = ctools_plugin_load_class('facetapi', 'filters', $filter_id, 'handler')) {
+        $filter_plugin = new $class($filter_id, $this->adapter, $settings);
+        $this->build = $filter_plugin->execute($this->build);
+      }
+      else {
+        watchdog('facetapi', 'Filter %name not valid.', array('%name' => $filter_id), WATCHDOG_ERROR);
+      }
+    }
+
     // Instantiates the widget plugin and initializes.
+    // @todo Defensive coding here for widgets?
     $widget_name = $settings->settings['widget'];
-    $class = ctools_plugin_load_class('facetapi', 'widgets', $widget_name, 'handler');
+    if (!$class = ctools_plugin_load_class('facetapi', 'widgets', $widget_name, 'handler')) {
+      watchdog('facetapi', 'Widget %name not valid.', array('%name' => $widget_name), WATCHDOG_ERROR);
+      return array();
+    }
     $widget_plugin = new $class($widget_name, $realm, $this, $settings);
     $widget_plugin->init();
 
-    // Executes widget plugin if not empty, otherwise executes the empty
-    // behavior plugin.
     if ($this->build) {
+      // Executes widget plugin.
       $widget_plugin->execute();
       $build = $widget_plugin->getBuild();
     }
@@ -1010,13 +1011,6 @@ class FacetapiFacetProcessor {
   protected $facet;
 
   /**
-   * The key in $params corresponding to filters.
-   *
-   * @var string
-   */
-  protected $filterKey;
-
-  /**
    * The facet's initialized render array.
    *
    * @var array
@@ -1034,15 +1028,11 @@ class FacetapiFacetProcessor {
    * Constructor, initializes render array.
    *
    * @param FacetapiFacet $facet
-   *
-   * @param $filter_key
-   *   The array key in $params corresponding to filters. $params[$filter_key]
-   *   must be an array.
+   *   The facet being processed.
    *
    */
-  public function __construct(FacetapiFacet $facet, $filter_key) {
+  public function __construct(FacetapiFacet $facet) {
     $this->facet = $facet;
-    $this->filterKey = $filter_key;
   }
 
   /**
@@ -1063,6 +1053,16 @@ class FacetapiFacetProcessor {
         $this->processQueryStrings($this->build);
       }
     }
+  }
+
+  /**
+   * Helper function to get the facet's active items.
+   *
+   * @return array
+   *   The facet's active items.
+   */
+  public function getActiveItems() {
+    return $this->facet->getAdapter()->getActiveItems($this->facet->getFacet());
   }
 
   /**
@@ -1116,6 +1116,7 @@ class FacetapiFacetProcessor {
     // Build array defaults.
     $defaults = array(
       '#markup' => '',
+      '#path' => $this->facet->getAdapter()->getSearchPath(),
       '#html' => FALSE,
       '#indexed_value' => '',
       '#count' => 0,
@@ -1150,9 +1151,12 @@ class FacetapiFacetProcessor {
    */
   protected function mapValues(array $build) {
     if ($this->facet['map callback']) {
-      $this->map = call_user_func($this->facet['map callback'], array_keys($build), $this->facet['map options']);
+      // Gets available items and active items, runs through map callback.
+      // NOTE: array_merge() doesn't work here when the values are numeric.
+      $values = array_unique(array_keys($build + $this->getActiveItems()));
+      $this->map = call_user_func($this->facet['map callback'], $values, $this->facet['map options']);
+      // Normalize all mapped values to a two element array.
       foreach ($this->map as $key => $value) {
-        // Normalize all mapped values to a two element array.
         if (!is_array($value)) {
           $this->map[$key] = array();
           $this->map[$key]['#markup'] = $value;
@@ -1222,18 +1226,18 @@ class FacetapiFacetProcessor {
   protected function processQueryStrings(array &$build) {
     foreach ($build as $value => &$item) {
       $values = array($value);
-      if ($item['#active']) {
-        // If the item is active an has children, gets the paths for the
-        // children. Merges child values with this facet item's value so that
-        // unclicking the parent deactivates the children as well.
-        if (!empty($item['#item_children'])) {
-          $this->processQueryStrings($item['#item_children']);
+      // Calculate paths for the children.
+      if (!empty($item['#item_children'])) {
+        $this->processQueryStrings($item['#item_children']);
+        // Merges the childrens' values if the item is active so the children
+        // are deactivated along with the parent.
+        if ($item['#active']) {
           $values = array_merge(facetapi_get_child_values($item['#item_children']), $values);
         }
-        // Stores this item's active children so we can deactivate them in the
-        // current search block as well.
-        $this->activeChildren[$value] = $values;
       }
+      // Stores this item's active children so we can deactivate them in the
+      // current search block as well.
+      $this->activeChildren[$value] = $values;
 
       // Formats query string for facet item, sets theme function.
       $item['#query'] = $this->getQueryString($values, $item['#active']);
@@ -1253,23 +1257,9 @@ class FacetapiFacetProcessor {
    *   An array containing the query string variables.
    */
   public function getQueryString(array $values, $active) {
-    $adapter = $this->facet->getAdapter();
-    $qstring = $adapter->getParams();
-    $active_items = $adapter->getActiveItems($this->facet->getFacet());
-
-    // Appends to qstring if inactive, removes if inactive.
-    foreach ($values as $value) {
-      if ($active && isset($active_items[$value])) {
-        unset($qstring[$this->filterKey][$active_items[$value]['pos']]);
-      }
-      elseif (!$active) {
-        $qstring[$this->filterKey][] = $this->facet['field alias'] . ':' . $value;
-      }
-    }
-
-    // Resets array keys, returns query string.
-    $qstring[$this->filterKey] = array_values($qstring[$this->filterKey]);
-    return array_filter($qstring);
+    return $this->facet
+      ->getAdapter()
+      ->getQueryString($this->facet->getFacet(), $values, $active);
   }
 }
 
@@ -1305,4 +1295,17 @@ function facetapi_get_child_values(array $build) {
  */
 function facetapi_filter_inactive_parent(array $build) {
   return empty($build['#item_parents']);
+}
+
+/**
+ * Callback for array_filter() that strips out disabled filters.
+ *
+ * @param array $settings
+ *   The individual filter settings.
+ *
+ * @return
+ *   A boolean flagging whether the value should remain in the array.
+ */
+function facetapi_filter_disabled_filters($settings) {
+  return !empty($settings['status']);
 }

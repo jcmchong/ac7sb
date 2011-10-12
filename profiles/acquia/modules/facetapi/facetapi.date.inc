@@ -107,8 +107,8 @@ function facetapi_get_next_date_gap($gap, $min_gap = FACETAPI_DATE_SECOND) {
 function facetapi_get_timestamp_gap($start_time, $end_time) {
   $time_diff = $end_time - $start_time;
   switch (TRUE) {
-    // NOTE: 86400365 == 60 * 60 * 24 * 365
-    case ($time_diff >= 86400365):
+    // NOTE: 31536000 == 60 * 60 * 24 * 365
+    case ($time_diff >= 31536000):
       return FACETAPI_DATE_YEAR;
 
     case (gmdate('Ym', $start_time) != gmdate('Ym', $end_time)):

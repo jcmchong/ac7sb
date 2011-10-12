@@ -28,8 +28,10 @@ Drupal.facetapi = {}
  * Applies the soft limit to facets in the block realm.
  */
 Drupal.facetapi.applyLimit = function(settings) {
-  if (settings.limit > 0) {
-    
+  if (settings.limit > 0 && !$('ul#' + settings.id).hasClass('facetapi-processed')) {
+    // Only process this code once per page load.
+    $('ul#' + settings.id).addClass('facetapi-processed');
+
     // Ensures our limit is zero-based, hides facets over the limit.
     var limit = settings.limit - 1;
     $('ul#' + settings.id).find('li:gt(' + limit + ')').hide();
